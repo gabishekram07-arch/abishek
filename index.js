@@ -3811,8 +3811,6 @@ var findStringEnd = (heapOrArray, idx, maxBytesToRead, ignoreNul) => {
   var __abort_js = () =>
       abort('native code called abort()');
 
-  var _emscripten_date_now = () => Date.now();
-
   var abortOnCannotGrowMemory = (requestedSize) => {
       abort(`Cannot enlarge memory arrays to size ${requestedSize} bytes (OOM). Either (1) compile with -sINITIAL_MEMORY=X with X higher than the current value ${HEAP8.length}, (2) compile with -sALLOW_MEMORY_GROWTH which allows increasing the size at runtime, or (3) if you want malloc to return NULL (0) instead of this abort, compile with -sABORTING_MALLOC=0`);
     };
@@ -3822,6 +3820,35 @@ var findStringEnd = (heapOrArray, idx, maxBytesToRead, ignoreNul) => {
       requestedSize >>>= 0;
       abortOnCannotGrowMemory(requestedSize);
     };
+
+  
+  var runtimeKeepaliveCounter = 0;
+  var keepRuntimeAlive = () => noExitRuntime || runtimeKeepaliveCounter > 0;
+  var _proc_exit = (code) => {
+      EXITSTATUS = code;
+      if (!keepRuntimeAlive()) {
+        Module['onExit']?.(code);
+        ABORT = true;
+      }
+      quit_(code, new ExitStatus(code));
+    };
+  
+  
+  /** @param {boolean|number=} implicit */
+  var exitJS = (status, implicit) => {
+      EXITSTATUS = status;
+  
+      checkUnflushedContent();
+  
+      // if exit() was called explicitly, warn the user if the runtime isn't actually being shut down
+      if (keepRuntimeAlive() && !implicit) {
+        var msg = `program exited (with status: ${status}), but keepRuntimeAlive() is set (counter=${runtimeKeepaliveCounter}) due to an async operation, so halting execution but not exiting the runtime or preventing further async execution (you can use emscripten_force_exit, if you want to force a true shutdown)`;
+        err(msg);
+      }
+  
+      _proc_exit(status);
+    };
+  var _exit = exitJS;
 
   function _fd_close(fd) {
   try {
@@ -3924,33 +3951,6 @@ var findStringEnd = (heapOrArray, idx, maxBytesToRead, ignoreNul) => {
   }
   }
 
-  
-  var runtimeKeepaliveCounter = 0;
-  var keepRuntimeAlive = () => noExitRuntime || runtimeKeepaliveCounter > 0;
-  var _proc_exit = (code) => {
-      EXITSTATUS = code;
-      if (!keepRuntimeAlive()) {
-        Module['onExit']?.(code);
-        ABORT = true;
-      }
-      quit_(code, new ExitStatus(code));
-    };
-  
-  
-  /** @param {boolean|number=} implicit */
-  var exitJS = (status, implicit) => {
-      EXITSTATUS = status;
-  
-      checkUnflushedContent();
-  
-      // if exit() was called explicitly, warn the user if the runtime isn't actually being shut down
-      if (keepRuntimeAlive() && !implicit) {
-        var msg = `program exited (with status: ${status}), but keepRuntimeAlive() is set (counter=${runtimeKeepaliveCounter}) due to an async operation, so halting execution but not exiting the runtime or preventing further async execution (you can use emscripten_force_exit, if you want to force a true shutdown)`;
-        err(msg);
-      }
-  
-      _proc_exit(status);
-    };
 
   var handleException = (e) => {
       // Certain exception types we do not treat as errors since they are used for
@@ -3971,7 +3971,6 @@ var findStringEnd = (heapOrArray, idx, maxBytesToRead, ignoreNul) => {
     };
 
   
-  var _exit = exitJS;
   
   
   var maybeExit = () => {
@@ -4970,9 +4969,9 @@ function checkIncomingModuleAPI() {
 // Imports from the Wasm binary.
 var _main = Module['_main'] = makeInvalidEarlyAccess('_main');
 var _fflush = makeInvalidEarlyAccess('_fflush');
+var _strerror = makeInvalidEarlyAccess('_strerror');
 var _emscripten_stack_get_end = makeInvalidEarlyAccess('_emscripten_stack_get_end');
 var _emscripten_stack_get_base = makeInvalidEarlyAccess('_emscripten_stack_get_base');
-var _strerror = makeInvalidEarlyAccess('_strerror');
 var _emscripten_stack_init = makeInvalidEarlyAccess('_emscripten_stack_init');
 var _emscripten_stack_get_free = makeInvalidEarlyAccess('_emscripten_stack_get_free');
 var __emscripten_stack_restore = makeInvalidEarlyAccess('__emscripten_stack_restore');
@@ -4985,9 +4984,9 @@ var wasmMemory = makeInvalidEarlyAccess('wasmMemory');
 function assignWasmExports(wasmExports) {
   assert(typeof wasmExports['main'] != 'undefined', 'missing Wasm export: main');
   assert(typeof wasmExports['fflush'] != 'undefined', 'missing Wasm export: fflush');
+  assert(typeof wasmExports['strerror'] != 'undefined', 'missing Wasm export: strerror');
   assert(typeof wasmExports['emscripten_stack_get_end'] != 'undefined', 'missing Wasm export: emscripten_stack_get_end');
   assert(typeof wasmExports['emscripten_stack_get_base'] != 'undefined', 'missing Wasm export: emscripten_stack_get_base');
-  assert(typeof wasmExports['strerror'] != 'undefined', 'missing Wasm export: strerror');
   assert(typeof wasmExports['emscripten_stack_init'] != 'undefined', 'missing Wasm export: emscripten_stack_init');
   assert(typeof wasmExports['emscripten_stack_get_free'] != 'undefined', 'missing Wasm export: emscripten_stack_get_free');
   assert(typeof wasmExports['_emscripten_stack_restore'] != 'undefined', 'missing Wasm export: _emscripten_stack_restore');
@@ -4997,9 +4996,9 @@ function assignWasmExports(wasmExports) {
   assert(typeof wasmExports['__indirect_function_table'] != 'undefined', 'missing Wasm export: __indirect_function_table');
   _main = Module['_main'] = createExportWrapper('main', 2);
   _fflush = createExportWrapper('fflush', 1);
+  _strerror = createExportWrapper('strerror', 1);
   _emscripten_stack_get_end = wasmExports['emscripten_stack_get_end'];
   _emscripten_stack_get_base = wasmExports['emscripten_stack_get_base'];
-  _strerror = createExportWrapper('strerror', 1);
   _emscripten_stack_init = wasmExports['emscripten_stack_init'];
   _emscripten_stack_get_free = wasmExports['emscripten_stack_get_free'];
   __emscripten_stack_restore = wasmExports['_emscripten_stack_restore'];
@@ -5019,9 +5018,9 @@ var wasmImports = {
   /** @export */
   _abort_js: __abort_js,
   /** @export */
-  emscripten_date_now: _emscripten_date_now,
-  /** @export */
   emscripten_resize_heap: _emscripten_resize_heap,
+  /** @export */
+  exit: _exit,
   /** @export */
   fd_close: _fd_close,
   /** @export */
