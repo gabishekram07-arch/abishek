@@ -476,8 +476,6 @@ var
 
 var runtimeInitialized = false;
 
-var runtimeExited = false;
-
 
 
 function updateMemoryViews() {
@@ -534,20 +532,6 @@ TTY.init();
 function preMain() {
   checkStackCookie();
   // No ATMAINS hooks
-}
-
-function exitRuntime() {
-  assert(!runtimeExited);
-  // ASYNCIFY cannot be used once the runtime starts shutting down.
-  Asyncify.state = Asyncify.State.Disabled;
-  checkStackCookie();
-   // PThreads reuse the runtime from the main thread.
-  ___funcs_on_exit(); // Native atexit() functions
-  // Begin ATEXITS hooks
-  FS.quit();
-TTY.shutdown();
-  // End ATEXITS hooks
-  runtimeExited = true;
 }
 
 function postRun() {
@@ -607,7 +591,6 @@ function abort(what) {
 function createExportWrapper(name, nargs) {
   return (...args) => {
     assert(runtimeInitialized, `native function \`${name}\` called before runtime initialization`);
-    assert(!runtimeExited, `native function \`${name}\` called after runtime exit (use NO_EXIT_RUNTIME to keep it alive after main() exits)`);
     var f = wasmExports[name];
     assert(f, `exported native function \`${name}\` not found`);
     // Only assert for too many arguments. Too few can be valid since the missing arguments will be zero filled.
@@ -908,7 +891,7 @@ async function createWasm() {
     }
   }
 
-  var noExitRuntime = false;
+  var noExitRuntime = true;
 
   var ptrToString = (ptr) => {
       assert(typeof ptr === 'number', `ptrToString expects a number, got ${typeof ptr}`);
@@ -3886,9 +3869,7 @@ var findStringEnd = (heapOrArray, idx, maxBytesToRead, ignoreNul) => {
   var exitJS = (status, implicit) => {
       EXITSTATUS = status;
   
-      if (!keepRuntimeAlive()) {
-        exitRuntime();
-      }
+      checkUnflushedContent();
   
       // if exit() was called explicitly, warn the user if the runtime isn't actually being shut down
       if (keepRuntimeAlive() && !implicit) {
@@ -4032,9 +4013,6 @@ var findStringEnd = (heapOrArray, idx, maxBytesToRead, ignoreNul) => {
   
   
   var maybeExit = () => {
-      if (runtimeExited) {
-        return;
-      }
       if (!keepRuntimeAlive()) {
         try {
           _exit(EXITSTATUS);
@@ -4044,7 +4022,7 @@ var findStringEnd = (heapOrArray, idx, maxBytesToRead, ignoreNul) => {
       }
     };
   var callUserCallback = (func) => {
-      if (runtimeExited || ABORT) {
+      if (ABORT) {
         err('user callback triggered after runtime exited or application aborted.  Ignoring.');
         return;
       }
@@ -4067,8 +4045,6 @@ var findStringEnd = (heapOrArray, idx, maxBytesToRead, ignoreNul) => {
       assert(runtimeKeepaliveCounter > 0);
       runtimeKeepaliveCounter -= 1;
     };
-  
-  
   
   
   var Asyncify = {
@@ -4171,7 +4147,7 @@ var findStringEnd = (heapOrArray, idx, maxBytesToRead, ignoreNul) => {
           // the dbg() function itself can call back into WebAssembly to get the
           // current pthread_self() pointer).
           Asyncify.state = Asyncify.State.Normal;
-          runtimeKeepalivePush();
+          
           // Keep the runtime alive so that a re-wind can be done later.
           runAndAbortIfError(_asyncify_stop_unwind);
           if (typeof Fibers != 'undefined') {
@@ -4223,7 +4199,7 @@ var findStringEnd = (heapOrArray, idx, maxBytesToRead, ignoreNul) => {
         assert(func);
         // Once we have rewound and the stack we no longer need to artificially
         // keep the runtime alive.
-        runtimeKeepalivePop();
+        
         return callUserCallback(func);
       },
   handleSleep(startAsync) {
@@ -4323,127 +4299,508 @@ var findStringEnd = (heapOrArray, idx, maxBytesToRead, ignoreNul) => {
       }),
   };
 
-  var getCFunc = (ident) => {
-      var func = Module['_' + ident]; // closure exported function
-      assert(func, 'Cannot call unknown function ' + ident + ', make sure it is exported');
-      return func;
-    };
   
-  var writeArrayToMemory = (array, buffer) => {
-      assert(array.length >= 0, 'writeArrayToMemory array must have a length (should be an array or typed array)')
-      HEAP8.set(array, buffer);
-    };
+  function getFullscreenElement() {
+      return document.fullscreenElement || document.mozFullScreenElement ||
+             document.webkitFullscreenElement || document.webkitCurrentFullScreenElement ||
+             document.msFullscreenElement;
+    }
   
-  
-  var stringToUTF8 = (str, outPtr, maxBytesToWrite) => {
-      assert(typeof maxBytesToWrite == 'number', 'stringToUTF8(str, outPtr, maxBytesToWrite) is missing the third parameter that specifies the length of the output buffer!');
-      return stringToUTF8Array(str, HEAPU8, outPtr, maxBytesToWrite);
-    };
-  
-  var stackAlloc = (sz) => __emscripten_stack_alloc(sz);
-  var stringToUTF8OnStack = (str) => {
-      var size = lengthBytesUTF8(str) + 1;
-      var ret = stackAlloc(size);
-      stringToUTF8(str, ret, size);
-      return ret;
+  /** @param {number=} timeout */
+  var safeSetTimeout = (func, timeout) => {
+      
+      return setTimeout(() => {
+        
+        callUserCallback(func);
+      }, timeout);
     };
   
   
   
+  var Browser = {
+  useWebGL:false,
+  isFullscreen:false,
+  pointerLock:false,
+  moduleContextCreatedCallbacks:[],
+  workers:[],
+  preloadedImages:{
+  },
+  preloadedAudios:{
+  },
+  getCanvas:() => Module['canvas'],
+  init() {
+        if (Browser.initted) return;
+        Browser.initted = true;
   
+        // Support for plugins that can process preloaded files. You can add more of these to
+        // your app by creating and appending to preloadPlugins.
+        //
+        // Each plugin is asked if it can handle a file based on the file's name. If it can,
+        // it is given the file's raw data. When it is done, it calls a callback with the file's
+        // (possibly modified) data. For example, a plugin might decompress a file, or it
+        // might create some side data structure for use later (like an Image element, etc.).
   
-  
-  
-    /**
-   * @param {string|null=} returnType
-   * @param {Array=} argTypes
-   * @param {Array=} args
-   * @param {Object=} opts
-   */
-  var ccall = (ident, returnType, argTypes, args, opts) => {
-      // For fast lookup of conversion functions
-      var toC = {
-        'string': (str) => {
-          var ret = 0;
-          if (str !== null && str !== undefined && str !== 0) { // null string
-            ret = stringToUTF8OnStack(str);
+        var imagePlugin = {};
+        imagePlugin['canHandle'] = (name) => {
+          return !Module['noImageDecoding'] && /\.(jpg|jpeg|png|bmp|webp)$/i.test(name);
+        };
+        imagePlugin['handle'] = async (byteArray, name) => {
+          var b = new Blob([byteArray], { type: Browser.getMimetype(name) });
+          if (b.size !== byteArray.length) { // Safari bug #118630
+            // Safari's Blob can only take an ArrayBuffer
+            b = new Blob([(new Uint8Array(byteArray)).buffer], { type: Browser.getMimetype(name) });
           }
-          return ret;
-        },
-        'array': (arr) => {
-          var ret = stackAlloc(arr.length);
-          writeArrayToMemory(arr, ret);
-          return ret;
-        }
-      };
+          var url = URL.createObjectURL(b);
+          return new Promise((resolve, reject) => {
+            var img = new Image();
+            img.onload = () => {
+              assert(img.complete, `Image ${name} could not be decoded`);
+              var canvas = /** @type {!HTMLCanvasElement} */ (document.createElement('canvas'));
+              canvas.width = img.width;
+              canvas.height = img.height;
+              var ctx = canvas.getContext('2d');
+              ctx.drawImage(img, 0, 0);
+              Browser.preloadedImages[name] = canvas;
+              URL.revokeObjectURL(url);
+              resolve(byteArray);
+            };
+            img.onerror = (event) => {
+              err(`Image ${url} could not be decoded`);
+              reject();
+            };
+            img.src = url;
+          });
+        };
+        preloadPlugins.push(imagePlugin);
   
-      function convertReturnValue(ret) {
-        if (returnType === 'string') {
-          return UTF8ToString(ret);
-        }
-        if (returnType === 'boolean') return Boolean(ret);
-        return ret;
-      }
+        var audioPlugin = {};
+        audioPlugin['canHandle'] = (name) => {
+          return !Module['noAudioDecoding'] && name.slice(-4) in { '.ogg': 1, '.wav': 1, '.mp3': 1 };
+        };
+        audioPlugin['handle'] = async (byteArray, name) => {
+          return new Promise((resolve, reject) => {
+            var done = false;
+            function finish(audio) {
+              if (done) return;
+              done = true;
+              Browser.preloadedAudios[name] = audio;
+              resolve(byteArray);
+            }
+            var b = new Blob([byteArray], { type: Browser.getMimetype(name) });
+            var url = URL.createObjectURL(b); // XXX we never revoke this!
+            var audio = new Audio();
+            audio.addEventListener('canplaythrough', () => finish(audio), false); // use addEventListener due to chromium bug 124926
+            audio.onerror = (event) => {
+              if (done) return;
+              err(`warning: browser could not fully decode audio ${name}, trying slower base64 approach`);
+              function encode64(data) {
+                var BASE = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+                var PAD = '=';
+                var ret = '';
+                var leftchar = 0;
+                var leftbits = 0;
+                for (var i = 0; i < data.length; i++) {
+                  leftchar = (leftchar << 8) | data[i];
+                  leftbits += 8;
+                  while (leftbits >= 6) {
+                    var curr = (leftchar >> (leftbits-6)) & 0x3f;
+                    leftbits -= 6;
+                    ret += BASE[curr];
+                  }
+                }
+                if (leftbits == 2) {
+                  ret += BASE[(leftchar&3) << 4];
+                  ret += PAD + PAD;
+                } else if (leftbits == 4) {
+                  ret += BASE[(leftchar&0xf) << 2];
+                  ret += PAD;
+                }
+                return ret;
+              }
+              audio.src = 'data:audio/x-' + name.slice(-3) + ';base64,' + encode64(byteArray);
+              finish(audio); // we don't wait for confirmation this worked - but it's worth trying
+            };
+            audio.src = url;
+            // workaround for chrome bug 124926 - we do not always get oncanplaythrough or onerror
+            safeSetTimeout(() => {
+              finish(audio); // try to use it even though it is not necessarily ready to play
+            }, 10000);
+          });
+        };
+        preloadPlugins.push(audioPlugin);
   
-      var func = getCFunc(ident);
-      var cArgs = [];
-      var stack = 0;
-      assert(returnType !== 'array', 'Return type should not be "array".');
-      if (args) {
-        for (var i = 0; i < args.length; i++) {
-          var converter = toC[argTypes[i]];
-          if (converter) {
-            if (stack === 0) stack = stackSave();
-            cArgs[i] = converter(args[i]);
+        // Canvas event setup
+  
+        function pointerLockChange() {
+          var canvas = Browser.getCanvas();
+          Browser.pointerLock = document.pointerLockElement === canvas;
+        }
+        var canvas = Browser.getCanvas();
+        if (canvas) {
+          // forced aspect ratio can be enabled by defining 'forcedAspectRatio' on Module
+          // Module['forcedAspectRatio'] = 4 / 3;
+  
+          document.addEventListener('pointerlockchange', pointerLockChange, false);
+  
+          if (Module['elementPointerLock']) {
+            canvas.addEventListener("click", (ev) => {
+              if (!Browser.pointerLock && Browser.getCanvas().requestPointerLock) {
+                Browser.getCanvas().requestPointerLock();
+                ev.preventDefault();
+              }
+            }, false);
+          }
+        }
+      },
+  createContext(/** @type {HTMLCanvasElement} */ canvas, useWebGL, setInModule, webGLContextAttributes) {
+        if (useWebGL && Module['ctx'] && canvas == Browser.getCanvas()) return Module['ctx']; // no need to recreate GL context if it's already been created for this canvas.
+  
+        var ctx;
+        var contextHandle;
+        if (useWebGL) {
+          // For GLES2/desktop GL compatibility, adjust a few defaults to be different to WebGL defaults, so that they align better with the desktop defaults.
+          var contextAttributes = {
+            antialias: false,
+            alpha: false,
+            majorVersion: 1,
+          };
+  
+          if (webGLContextAttributes) {
+            for (var attribute in webGLContextAttributes) {
+              contextAttributes[attribute] = webGLContextAttributes[attribute];
+            }
+          }
+  
+          // This check of existence of GL is here to satisfy Closure compiler, which yells if variable GL is referenced below but GL object is not
+          // actually compiled in because application is not doing any GL operations. TODO: Ideally if GL is not being used, this function
+          // Browser.createContext() should not even be emitted.
+          if (typeof GL != 'undefined') {
+            contextHandle = GL.createContext(canvas, contextAttributes);
+            if (contextHandle) {
+              ctx = GL.getContext(contextHandle).GLctx;
+            }
+          }
+        } else {
+          ctx = canvas.getContext('2d');
+        }
+  
+        if (!ctx) return null;
+  
+        if (setInModule) {
+          if (!useWebGL) assert(typeof GLctx == 'undefined', 'cannot set in module if GLctx is used, but we are a non-GL context that would replace it');
+          Module['ctx'] = ctx;
+          if (useWebGL) GL.makeContextCurrent(contextHandle);
+          Browser.useWebGL = useWebGL;
+          Browser.moduleContextCreatedCallbacks.forEach((callback) => callback());
+          Browser.init();
+        }
+        return ctx;
+      },
+  fullscreenHandlersInstalled:false,
+  lockPointer:undefined,
+  resizeCanvas:undefined,
+  requestFullscreen(lockPointer, resizeCanvas) {
+        Browser.lockPointer = lockPointer;
+        Browser.resizeCanvas = resizeCanvas;
+        if (typeof Browser.lockPointer == 'undefined') Browser.lockPointer = true;
+        if (typeof Browser.resizeCanvas == 'undefined') Browser.resizeCanvas = false;
+  
+        var canvas = Browser.getCanvas();
+        function fullscreenChange() {
+          Browser.isFullscreen = false;
+          var canvasContainer = canvas.parentNode;
+          if (getFullscreenElement() === canvasContainer) {
+            canvas.exitFullscreen = Browser.exitFullscreen;
+            if (Browser.lockPointer) canvas.requestPointerLock();
+            Browser.isFullscreen = true;
+            if (Browser.resizeCanvas) {
+              Browser.setFullscreenCanvasSize();
+            } else {
+              Browser.updateCanvasDimensions(canvas);
+            }
           } else {
-            cArgs[i] = args[i];
+            // remove the full screen specific parent of the canvas again to restore the HTML structure from before going full screen
+            canvasContainer.parentNode.insertBefore(canvas, canvasContainer);
+            canvasContainer.parentNode.removeChild(canvasContainer);
+  
+            if (Browser.resizeCanvas) {
+              Browser.setWindowedCanvasSize();
+            } else {
+              Browser.updateCanvasDimensions(canvas);
+            }
+          }
+          Module['onFullScreen']?.(Browser.isFullscreen);
+          Module['onFullscreen']?.(Browser.isFullscreen);
+        }
+  
+        if (!Browser.fullscreenHandlersInstalled) {
+          Browser.fullscreenHandlersInstalled = true;
+          document.addEventListener('fullscreenchange', fullscreenChange, false);
+          document.addEventListener('mozfullscreenchange', fullscreenChange, false);
+          document.addEventListener('webkitfullscreenchange', fullscreenChange, false);
+          document.addEventListener('MSFullscreenChange', fullscreenChange, false);
+        }
+  
+        // create a new parent to ensure the canvas has no siblings. this allows browsers to optimize full screen performance when its parent is the full screen root
+        var canvasContainer = document.createElement("div");
+        canvas.parentNode.insertBefore(canvasContainer, canvas);
+        canvasContainer.appendChild(canvas);
+  
+        // use parent of canvas as full screen root to allow aspect ratio correction (Firefox stretches the root to screen size)
+        canvasContainer.requestFullscreen = canvasContainer['requestFullscreen'] ||
+                                            canvasContainer['mozRequestFullScreen'] ||
+                                            canvasContainer['msRequestFullscreen'] ||
+                                           (canvasContainer['webkitRequestFullscreen'] ? () => canvasContainer['webkitRequestFullscreen'](Element['ALLOW_KEYBOARD_INPUT']) : null) ||
+                                           (canvasContainer['webkitRequestFullScreen'] ? () => canvasContainer['webkitRequestFullScreen'](Element['ALLOW_KEYBOARD_INPUT']) : null);
+  
+        canvasContainer.requestFullscreen();
+      },
+  requestFullScreen() {
+        abort('Module.requestFullScreen has been replaced by Module.requestFullscreen (without a capital S)');
+      },
+  exitFullscreen() {
+        // This is workaround for chrome. Trying to exit from fullscreen
+        // not in fullscreen state will cause "TypeError: Document not active"
+        // in chrome. See https://github.com/emscripten-core/emscripten/pull/8236
+        if (!Browser.isFullscreen) {
+          return false;
+        }
+  
+        var CFS = document['exitFullscreen'] ||
+                  document['cancelFullScreen'] ||
+                  document['mozCancelFullScreen'] ||
+                  document['msExitFullscreen'] ||
+                  document['webkitCancelFullScreen'] ||
+            (() => {});
+        CFS.apply(document, []);
+        return true;
+      },
+  safeSetTimeout(func, timeout) {
+        // Legacy function, this is used by the SDL2 port so we need to keep it
+        // around at least until that is updated.
+        // See https://github.com/libsdl-org/SDL/pull/6304
+        return safeSetTimeout(func, timeout);
+      },
+  getMimetype(name) {
+        return {
+          'jpg': 'image/jpeg',
+          'jpeg': 'image/jpeg',
+          'png': 'image/png',
+          'bmp': 'image/bmp',
+          'ogg': 'audio/ogg',
+          'wav': 'audio/wav',
+          'mp3': 'audio/mpeg'
+        }[name.slice(name.lastIndexOf('.')+1)];
+      },
+  getUserMedia(func) {
+        window.getUserMedia ||= navigator['getUserMedia'] ||
+                                navigator['mozGetUserMedia'];
+        window.getUserMedia(func);
+      },
+  getMovementX(event) {
+        return event['movementX'] ||
+               event['mozMovementX'] ||
+               event['webkitMovementX'] ||
+               0;
+      },
+  getMovementY(event) {
+        return event['movementY'] ||
+               event['mozMovementY'] ||
+               event['webkitMovementY'] ||
+               0;
+      },
+  getMouseWheelDelta(event) {
+        var delta = 0;
+        switch (event.type) {
+          case 'DOMMouseScroll':
+            // 3 lines make up a step
+            delta = event.detail / 3;
+            break;
+          case 'mousewheel':
+            // 120 units make up a step
+            delta = event.wheelDelta / 120;
+            break;
+          case 'wheel':
+            delta = event.deltaY
+            switch (event.deltaMode) {
+              case 0:
+                // DOM_DELTA_PIXEL: 100 pixels make up a step
+                delta /= 100;
+                break;
+              case 1:
+                // DOM_DELTA_LINE: 3 lines make up a step
+                delta /= 3;
+                break;
+              case 2:
+                // DOM_DELTA_PAGE: A page makes up 80 steps
+                delta *= 80;
+                break;
+              default:
+                abort('unrecognized mouse wheel delta mode: ' + event.deltaMode);
+            }
+            break;
+          default:
+            abort('unrecognized mouse wheel event: ' + event.type);
+        }
+        return delta;
+      },
+  mouseX:0,
+  mouseY:0,
+  mouseMovementX:0,
+  mouseMovementY:0,
+  touches:{
+  },
+  lastTouches:{
+  },
+  calculateMouseCoords(pageX, pageY) {
+        // Calculate the movement based on the changes
+        // in the coordinates.
+        var canvas = Browser.getCanvas();
+        var rect = canvas.getBoundingClientRect();
+  
+        // Neither .scrollX or .pageXOffset are defined in a spec, but
+        // we prefer .scrollX because it is currently in a spec draft.
+        // (see: http://www.w3.org/TR/2013/WD-cssom-view-20131217/)
+        var scrollX = ((typeof window.scrollX != 'undefined') ? window.scrollX : window.pageXOffset);
+        var scrollY = ((typeof window.scrollY != 'undefined') ? window.scrollY : window.pageYOffset);
+        // If this assert lands, it's likely because the browser doesn't support scrollX or pageXOffset
+        // and we have no viable fallback.
+        assert((typeof scrollX != 'undefined') && (typeof scrollY != 'undefined'), 'Unable to retrieve scroll position, mouse positions likely broken.');
+        var adjustedX = pageX - (scrollX + rect.left);
+        var adjustedY = pageY - (scrollY + rect.top);
+  
+        // the canvas might be CSS-scaled compared to its backbuffer;
+        // SDL-using content will want mouse coordinates in terms
+        // of backbuffer units.
+        adjustedX = adjustedX * (canvas.width / rect.width);
+        adjustedY = adjustedY * (canvas.height / rect.height);
+  
+        return { x: adjustedX, y: adjustedY };
+      },
+  setMouseCoords(pageX, pageY) {
+        const {x, y} = Browser.calculateMouseCoords(pageX, pageY);
+        Browser.mouseMovementX = x - Browser.mouseX;
+        Browser.mouseMovementY = y - Browser.mouseY;
+        Browser.mouseX = x;
+        Browser.mouseY = y;
+      },
+  calculateMouseEvent(event) { // event should be mousemove, mousedown or mouseup
+        if (Browser.pointerLock) {
+          // When the pointer is locked, calculate the coordinates
+          // based on the movement of the mouse.
+          // Workaround for Firefox bug 764498
+          if (event.type != 'mousemove' &&
+              ('mozMovementX' in event)) {
+            Browser.mouseMovementX = Browser.mouseMovementY = 0;
+          } else {
+            Browser.mouseMovementX = Browser.getMovementX(event);
+            Browser.mouseMovementY = Browser.getMovementY(event);
+          }
+  
+          // add the mouse delta to the current absolute mouse position
+          Browser.mouseX += Browser.mouseMovementX;
+          Browser.mouseY += Browser.mouseMovementY;
+        } else {
+          if (event.type === 'touchstart' || event.type === 'touchend' || event.type === 'touchmove') {
+            var touch = event.touch;
+            if (touch === undefined) {
+              return; // the "touch" property is only defined in SDL
+  
+            }
+            var coords = Browser.calculateMouseCoords(touch.pageX, touch.pageY);
+  
+            if (event.type === 'touchstart') {
+              Browser.lastTouches[touch.identifier] = coords;
+              Browser.touches[touch.identifier] = coords;
+            } else if (event.type === 'touchend' || event.type === 'touchmove') {
+              var last = Browser.touches[touch.identifier];
+              last ||= coords;
+              Browser.lastTouches[touch.identifier] = last;
+              Browser.touches[touch.identifier] = coords;
+            }
+            return;
+          }
+  
+          Browser.setMouseCoords(event.pageX, event.pageY);
+        }
+      },
+  resizeListeners:[],
+  updateResizeListeners() {
+        var canvas = Browser.getCanvas();
+        Browser.resizeListeners.forEach((listener) => listener(canvas.width, canvas.height));
+      },
+  setCanvasSize(width, height, noUpdates) {
+        var canvas = Browser.getCanvas();
+        Browser.updateCanvasDimensions(canvas, width, height);
+        if (!noUpdates) Browser.updateResizeListeners();
+      },
+  windowedWidth:0,
+  windowedHeight:0,
+  setFullscreenCanvasSize() {
+        // check if SDL is available
+        if (typeof SDL != "undefined") {
+          var flags = HEAPU32[((SDL.screen)>>2)];
+          flags = flags | 0x00800000; // set SDL_FULLSCREEN flag
+          HEAP32[((SDL.screen)>>2)] = flags;
+        }
+        Browser.updateCanvasDimensions(Browser.getCanvas());
+        Browser.updateResizeListeners();
+      },
+  setWindowedCanvasSize() {
+        // check if SDL is available
+        if (typeof SDL != "undefined") {
+          var flags = HEAPU32[((SDL.screen)>>2)];
+          flags = flags & ~0x00800000; // clear SDL_FULLSCREEN flag
+          HEAP32[((SDL.screen)>>2)] = flags;
+        }
+        Browser.updateCanvasDimensions(Browser.getCanvas());
+        Browser.updateResizeListeners();
+      },
+  updateCanvasDimensions(canvas, wNative, hNative) {
+        if (wNative && hNative) {
+          canvas.widthNative = wNative;
+          canvas.heightNative = hNative;
+        } else {
+          wNative = canvas.widthNative;
+          hNative = canvas.heightNative;
+        }
+        var w = wNative;
+        var h = hNative;
+        if (Module['forcedAspectRatio'] > 0) {
+          if (w/h < Module['forcedAspectRatio']) {
+            w = Math.round(h * Module['forcedAspectRatio']);
+          } else {
+            h = Math.round(w / Module['forcedAspectRatio']);
           }
         }
-      }
-      // Data for a previous async operation that was in flight before us.
-      var previousAsync = Asyncify.currData;
-      var ret = func(...cArgs);
-      function onDone(ret) {
-        runtimeKeepalivePop();
-        if (stack !== 0) stackRestore(stack);
-        return convertReturnValue(ret);
-      }
-    var asyncMode = opts?.async;
-  
-      // Keep the runtime alive through all calls. Note that this call might not be
-      // async, but for simplicity we push and pop in all calls.
-      runtimeKeepalivePush();
-      if (Asyncify.currData != previousAsync) {
-        // A change in async operation happened. If there was already an async
-        // operation in flight before us, that is an error: we should not start
-        // another async operation while one is active, and we should not stop one
-        // either. The only valid combination is to have no change in the async
-        // data (so we either had one in flight and left it alone, or we didn't have
-        // one), or to have nothing in flight and to start one.
-        assert(!(previousAsync && Asyncify.currData), 'We cannot start an async operation when one is already in flight');
-        assert(!(previousAsync && !Asyncify.currData), 'We cannot stop an async operation in flight');
-        // This is a new async operation. The wasm is paused and has unwound its stack.
-        // We need to return a Promise that resolves the return value
-        // once the stack is rewound and execution finishes.
-        assert(asyncMode, 'The call to ' + ident + ' is running asynchronously. If this was intended, add the async option to the ccall/cwrap call.');
-        return Asyncify.whenDone().then(onDone);
-      }
-  
-      ret = onDone(ret);
-      // If this is an async ccall, ensure we return a promise
-      if (asyncMode) return Promise.resolve(ret);
-      return ret;
-    };
-
-  
-    /**
-   * @param {string=} returnType
-   * @param {Array=} argTypes
-   * @param {Object=} opts
-   */
-  var cwrap = (ident, returnType, argTypes, opts) => {
-      return (...args) => ccall(ident, returnType, argTypes, args, opts);
-    };
+        if ((getFullscreenElement() === canvas.parentNode) && (typeof screen != 'undefined')) {
+           var factor = Math.min(screen.width / w, screen.height / h);
+           w = Math.round(w * factor);
+           h = Math.round(h * factor);
+        }
+        if (Browser.resizeCanvas) {
+          if (canvas.width  != w) canvas.width  = w;
+          if (canvas.height != h) canvas.height = h;
+          if (typeof canvas.style != 'undefined') {
+            canvas.style.removeProperty( "width");
+            canvas.style.removeProperty("height");
+          }
+        } else {
+          if (canvas.width  != wNative) canvas.width  = wNative;
+          if (canvas.height != hNative) canvas.height = hNative;
+          if (typeof canvas.style != 'undefined') {
+            if (w != wNative || h != hNative) {
+              canvas.style.setProperty( "width", w + "px", "important");
+              canvas.style.setProperty("height", h + "px", "important");
+            } else {
+              canvas.style.removeProperty( "width");
+              canvas.style.removeProperty("height");
+            }
+          }
+        }
+      },
+  };
+  var requestFullscreen = Browser.requestFullscreen;
 
   FS.createPreloadedFile = FS_createPreloadedFile;
   FS.preloadFile = FS_preloadFile;
@@ -4495,8 +4852,7 @@ if (Module['wasmBinary']) wasmBinary = Module['wasmBinary'];
 }
 
 // Begin runtime exports
-  Module['ccall'] = ccall;
-  Module['cwrap'] = cwrap;
+  Module['requestFullscreen'] = requestFullscreen;
   var missingLibrarySymbols = [
   'writeI53ToI64',
   'writeI53ToI64Clamped',
@@ -4508,6 +4864,7 @@ if (Module['wasmBinary']) wasmBinary = Module['wasmBinary'];
   'convertI32PairToI53',
   'convertI32PairToI53Checked',
   'convertU32PairToI53',
+  'stackAlloc',
   'getTempRet0',
   'setTempRet0',
   'zeroMemory',
@@ -4536,12 +4893,15 @@ if (Module['wasmBinary']) wasmBinary = Module['wasmBinary'];
   'STACK_ALIGN',
   'POINTER_SIZE',
   'ASSERTIONS',
+  'ccall',
+  'cwrap',
   'convertJsFunctionToWasm',
   'getEmptyTableSlot',
   'updateTableMap',
   'getFunctionAddress',
   'addFunction',
   'removeFunction',
+  'stringToUTF8',
   'intArrayToString',
   'AsciiToString',
   'stringToAscii',
@@ -4552,6 +4912,8 @@ if (Module['wasmBinary']) wasmBinary = Module['wasmBinary'];
   'stringToUTF32',
   'lengthBytesUTF32',
   'stringToNewUTF8',
+  'stringToUTF8OnStack',
+  'writeArrayToMemory',
   'registerKeyEventCallback',
   'maybeCStringToJsString',
   'findEventTarget',
@@ -4599,7 +4961,6 @@ if (Module['wasmBinary']) wasmBinary = Module['wasmBinary'];
   'checkWasiClock',
   'wasiRightsToMuslOFlags',
   'wasiOFlagsToMuslOFlags',
-  'safeSetTimeout',
   'setImmediateWrapped',
   'safeRequestAnimationFrame',
   'clearImmediateWrapped',
@@ -4678,7 +5039,6 @@ missingLibrarySymbols.forEach(missingLibrarySymbol)
   'bigintToI53Checked',
   'stackSave',
   'stackRestore',
-  'stackAlloc',
   'createNamedFunction',
   'ptrToString',
   'exitJS',
@@ -4720,12 +5080,9 @@ missingLibrarySymbols.forEach(missingLibrarySymbol)
   'UTF8ArrayToString',
   'UTF8ToString',
   'stringToUTF8Array',
-  'stringToUTF8',
   'lengthBytesUTF8',
   'intArrayFromString',
   'UTF16Decoder',
-  'stringToUTF8OnStack',
-  'writeArrayToMemory',
   'JSEvents',
   'specialHTMLTargets',
   'findCanvasEventTarget',
@@ -4737,6 +5094,7 @@ missingLibrarySymbols.forEach(missingLibrarySymbol)
   'doWritev',
   'initRandomFill',
   'randomFill',
+  'safeSetTimeout',
   'emSetImmediate',
   'emClearImmediate_deps',
   'emClearImmediate',
@@ -4745,7 +5103,6 @@ missingLibrarySymbols.forEach(missingLibrarySymbol)
   'exceptionLast',
   'exceptionCaught',
   'Browser',
-  'requestFullscreen',
   'requestFullScreen',
   'setCanvasSize',
   'getUserMedia',
@@ -4918,7 +5275,6 @@ function checkIncomingModuleAPI() {
 
 // Imports from the Wasm binary.
 var _main = Module['_main'] = makeInvalidEarlyAccess('_main');
-var ___funcs_on_exit = makeInvalidEarlyAccess('___funcs_on_exit');
 var _fflush = makeInvalidEarlyAccess('_fflush');
 var _free = makeInvalidEarlyAccess('_free');
 var _malloc = makeInvalidEarlyAccess('_malloc');
@@ -4945,7 +5301,6 @@ var wasmMemory = makeInvalidEarlyAccess('wasmMemory');
 
 function assignWasmExports(wasmExports) {
   assert(typeof wasmExports['main'] != 'undefined', 'missing Wasm export: main');
-  assert(typeof wasmExports['__funcs_on_exit'] != 'undefined', 'missing Wasm export: __funcs_on_exit');
   assert(typeof wasmExports['fflush'] != 'undefined', 'missing Wasm export: fflush');
   assert(typeof wasmExports['free'] != 'undefined', 'missing Wasm export: free');
   assert(typeof wasmExports['malloc'] != 'undefined', 'missing Wasm export: malloc');
@@ -4969,7 +5324,6 @@ function assignWasmExports(wasmExports) {
   assert(typeof wasmExports['memory'] != 'undefined', 'missing Wasm export: memory');
   assert(typeof wasmExports['__indirect_function_table'] != 'undefined', 'missing Wasm export: __indirect_function_table');
   _main = Module['_main'] = createExportWrapper('main', 2);
-  ___funcs_on_exit = createExportWrapper('__funcs_on_exit', 0);
   _fflush = createExportWrapper('fflush', 1);
   _free = createExportWrapper('free', 1);
   _malloc = createExportWrapper('malloc', 1);
@@ -5103,6 +5457,45 @@ function run() {
     doRun();
   }
   checkStackCookie();
+}
+
+function checkUnflushedContent() {
+  // Compiler settings do not allow exiting the runtime, so flushing
+  // the streams is not possible. but in ASSERTIONS mode we check
+  // if there was something to flush, and if so tell the user they
+  // should request that the runtime be exitable.
+  // Normally we would not even include flush() at all, but in ASSERTIONS
+  // builds we do so just for this check, and here we see if there is any
+  // content to flush, that is, we check if there would have been
+  // something a non-ASSERTIONS build would have not seen.
+  // How we flush the streams depends on whether we are in SYSCALLS_REQUIRE_FILESYSTEM=0
+  // mode (which has its own special function for this; otherwise, all
+  // the code is inside libc)
+  var oldOut = out;
+  var oldErr = err;
+  var has = false;
+  out = err = (x) => {
+    has = true;
+  }
+  try { // it doesn't matter if it fails
+    _fflush(0);
+    // also flush in the JS FS layer
+    for (var name of ['stdout', 'stderr']) {
+      var info = FS.analyzePath('/dev/' + name);
+      if (!info) return;
+      var stream = info.object;
+      var rdev = stream.rdev;
+      var tty = TTY.ttys[rdev];
+      if (tty?.output?.length) {
+        has = true;
+      }
+    }
+  } catch(e) {}
+  out = oldOut;
+  err = oldErr;
+  if (has) {
+    warnOnce('stdio streams had content in them that was not flushed. you should set EXIT_RUNTIME to 1 (see the Emscripten FAQ), or make sure to emit a newline when you printf etc.');
+  }
 }
 
 var wasmExports;
