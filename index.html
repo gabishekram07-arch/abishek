@@ -59,13 +59,13 @@ printErr: function(text){
 terminal.innerHTML += text + "\n";
 },
 
-stdin: function(){
+stdin: function() {
 
-if(inputBuffer.length === 0){
-return undefined;
+if (stdinBuffer.length === 0) {
+    return undefined;
 }
 
-return inputBuffer.shift();
+return stdinBuffer.shift();
 }
 
 };

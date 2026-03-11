@@ -7,7 +7,6 @@
 #define TOTAL_SEATS 50
 #define MAX_SHOWS 3
 
-// ---------------- STRUCTURES ----------------
 typedef struct {
     int bookingID;
     char customerName[50];
@@ -17,7 +16,6 @@ typedef struct {
     float totalAmount;
 } Booking;
 
-// ---------------- GLOBAL DATA ----------------
 char movies[MAX_SHOWS][50] = {
     "Avengers",
     "Avatar 2",
@@ -27,7 +25,6 @@ char movies[MAX_SHOWS][50] = {
 int seats[MAX_SHOWS][ROWS][COLS] = {0};
 int bookingCounter = 1000;
 
-// ---------------- FUNCTION DECLARATIONS ----------------
 void displayShows();
 void displaySeats(int show);
 void bookTicket();
@@ -36,8 +33,9 @@ void viewBooking();
 void occupancyReport();
 int seatAvailable(int show, int seatNo);
 
-// ---------------- MAIN ----------------
 int main() {
+
+    setvbuf(stdout, NULL, _IONBF, 0);   // important for WebAssembly terminal
 
     int choice;
 
@@ -54,6 +52,8 @@ int main() {
         printf("5. Exit\n");
 
         printf("Enter choice: ");
+        fflush(stdout);
+
         scanf("%d",&choice);
 
         switch(choice)
@@ -84,7 +84,6 @@ int main() {
     }
 }
 
-// ---------------- DISPLAY MOVIES ----------------
 void displayShows()
 {
     printf("\nAvailable Shows\n");
@@ -95,7 +94,6 @@ void displayShows()
     }
 }
 
-// ---------------- DISPLAY SEAT LAYOUT ----------------
 void displaySeats(int show)
 {
     printf("\nSeat Layout (0 = Available, 1 = Booked)\n\n");
@@ -112,7 +110,6 @@ void displaySeats(int show)
     printf("\nSeat Numbers: 1 - 50\n");
 }
 
-// ---------------- CHECK SEAT AVAILABLE ----------------
 int seatAvailable(int show, int seatNo)
 {
     int r = (seatNo-1)/COLS;
@@ -124,7 +121,6 @@ int seatAvailable(int show, int seatNo)
         return 0;
 }
 
-// ---------------- BOOK TICKET ----------------
 void bookTicket()
 {
     Booking b;
@@ -134,6 +130,7 @@ void bookTicket()
     displayShows();
 
     printf("Select show: ");
+    fflush(stdout);
     scanf("%d",&show);
 
     if(show <1 || show>MAX_SHOWS)
@@ -147,9 +144,11 @@ void bookTicket()
     displaySeats(show);
 
     printf("Enter customer name: ");
-    scanf("%s",b.customerName);
+    fflush(stdout);
+    scanf("%49s",b.customerName);
 
     printf("Enter number of seats: ");
+    fflush(stdout);
     scanf("%d",&b.seatCount);
 
     if(b.seatCount<=0 || b.seatCount>10)
@@ -163,6 +162,7 @@ void bookTicket()
         int seatNo;
 
         printf("Enter seat number: ");
+        fflush(stdout);
         scanf("%d",&seatNo);
 
         if(seatNo<1 || seatNo>50)
@@ -189,13 +189,11 @@ void bookTicket()
     strcpy(b.movie,movies[show]);
 
     b.bookingID = bookingCounter++;
-
     b.totalAmount = b.seatCount * price;
 
     saveBooking(b);
 
     printf("\n----- BOOKING RECEIPT -----\n");
-
     printf("Booking ID: %d\n",b.bookingID);
     printf("Customer: %s\n",b.customerName);
     printf("Movie: %s\n",b.movie);
@@ -205,10 +203,9 @@ void bookTicket()
     for(int i=0;i<b.seatCount;i++)
         printf("%d ",b.seats[i]);
 
-    printf("\nTotal Amount: %0.2f\n",b.totalAmount);
+    printf("\nTotal Amount: %.2f\n",b.totalAmount);
 }
 
-// ---------------- SAVE BOOKING ----------------
 void saveBooking(Booking b)
 {
     FILE *fp;
@@ -226,7 +223,6 @@ void saveBooking(Booking b)
     fclose(fp);
 }
 
-// ---------------- VIEW BOOKING ----------------
 void viewBooking()
 {
     FILE *fp;
@@ -234,6 +230,7 @@ void viewBooking()
     int id,found=0;
 
     printf("Enter Booking ID: ");
+    fflush(stdout);
     scanf("%d",&id);
 
     fp = fopen("bookings.dat","rb");
@@ -271,7 +268,6 @@ void viewBooking()
     fclose(fp);
 }
 
-// ---------------- OCCUPANCY REPORT ----------------
 void occupancyReport()
 {
     for(int s=0;s<MAX_SHOWS;s++)
@@ -288,7 +284,6 @@ void occupancyReport()
         }
 
         int available = TOTAL_SEATS - booked;
-
         float percent = ((float)booked/TOTAL_SEATS)*100;
 
         printf("\nMovie: %s\n",movies[s]);
