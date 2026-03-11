@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-
 <html>
 <head>
 <meta charset="UTF-8">
@@ -19,6 +18,7 @@ border:2px solid #00ff00;
 padding:10px;
 overflow-y:auto;
 margin-bottom:10px;
+white-space:pre-wrap;
 }
 
 #input{
@@ -37,16 +37,16 @@ border:2px solid #00ff00;
 
 <h2>🎬 Movie Ticket Booking System</h2>
 
-<pre id="terminal"></pre>
+<div id="terminal"></div>
 
 <input id="input" placeholder="Type input and press Enter">
 
 <script>
 
-var terminal = document.getElementById("terminal");
-var input = document.getElementById("input");
+let terminal = document.getElementById("terminal");
+let input = document.getElementById("input");
 
-var stdinBuffer = [];
+let inputBuffer = [];
 
 var Module = {
 
@@ -56,12 +56,16 @@ terminal.scrollTop = terminal.scrollHeight;
 },
 
 printErr: function(text){
-console.error(text);
+terminal.innerHTML += text + "\n";
 },
 
 stdin: function(){
-if(stdinBuffer.length === 0) return null;
-return stdinBuffer.shift();
+
+if(inputBuffer.length === 0){
+return undefined;
+}
+
+return inputBuffer.shift();
 }
 
 };
@@ -72,16 +76,15 @@ if(e.key === "Enter"){
 
 let value = input.value;
 
-terminal.innerHTML += "> " + value + "\n";
+terminal.innerHTML += value + "\n";
 
 for(let i=0;i<value.length;i++){
-stdinBuffer.push(value.charCodeAt(i));
+inputBuffer.push(value.charCodeAt(i));
 }
 
-stdinBuffer.push(10);
+inputBuffer.push(10);
 
-input.value = "";
-
+input.value="";
 }
 
 });
