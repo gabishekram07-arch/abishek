@@ -30,10 +30,36 @@
             background: #666;
         }
 
+        #screen {
+            margin-top: 20px;
+        }
+
+        .seat {
+            width: 35px;
+            height: 35px;
+            margin: 4px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: green;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .selected {
+            background: yellow;
+            color: black;
+        }
+
+        .booked {
+            background: red;
+            cursor: not-allowed;
+        }
+
         #output {
             margin: 20px auto;
             width: 80%;
-            height: 300px;
+            height: 250px;
             background: black;
             color: #00ff00;
             padding: 10px;
@@ -50,30 +76,25 @@
 
 <div id="controls">
     <button onclick="viewShows()">View Shows</button>
-    <button onclick="bookTickets()">Book Tickets</button>
+    <button onclick="startBooking()">Book Tickets</button>
     <button onclick="searchBooking()">Search Booking</button>
     <button onclick="occupancy()">Occupancy Report</button>
 </div>
 
+<div id="screen"></div>
 <div id="output"></div>
 
-<!-- ✅ IMPORTANT: Define Module BEFORE loading output.js -->
+<!-- MUST COME BEFORE output.js -->
 <script>
 var Module = {
     print: function(text) {
         let out = document.getElementById("output");
         out.innerHTML += text + "\n";
         out.scrollTop = out.scrollHeight;
-    },
-
-    printErr: function(text) {
-        let out = document.getElementById("output");
-        out.innerHTML += text + "\n";
     }
 };
 </script>
 
-<!-- ✅ Load compiled C code -->
 <script src="output.js"></script>
 
 <script>
@@ -81,29 +102,12 @@ function sendInput(val) {
     Module.ccall('processInput', null, ['string'], [val]);
 }
 
-/* -------- BUTTON FUNCTIONS -------- */
+/* -------- BASIC BUTTONS -------- */
 
 function viewShows() {
-    let show = prompt("Enter show number (1-3)");
+    let show = prompt("Enter show (1-3)");
     sendInput("1");
     sendInput(show);
-}
-
-function bookTickets() {
-    let show = prompt("Select show (1-3)");
-    let seats = prompt("Number of seats");
-    let name = prompt("Customer name");
-
-    sendInput("2");
-    sendInput(show);
-    sendInput(seats);
-    sendInput(name);
-
-    // seat selection (manual input for now)
-    for (let i = 0; i < seats; i++) {
-        let seat = prompt("Enter seat (e.g., A1)");
-        sendInput(seat);
-    }
 }
 
 function searchBooking() {
@@ -114,6 +118,75 @@ function searchBooking() {
 
 function occupancy() {
     sendInput("4");
+}
+
+/* -------- BOOKING FLOW -------- */
+
+let selectedSeats = [];
+let seatsRequired = 0;
+
+function startBooking() {
+    let show = prompt("Select show (1-3)");
+    seatsRequired = parseInt(prompt("Number of seats"));
+    let name = prompt("Customer name");
+
+    sendInput("2");
+    sendInput(show);
+    sendInput(seatsRequired.toString());
+    sendInput(name);
+
+    createSeatGrid();
+}
+
+/* -------- SEAT GRID -------- */
+
+function createSeatGrid() {
+
+    selectedSeats = [];
+    let screen = document.getElementById("screen");
+    screen.innerHTML = "<h3>Select Seats</h3>";
+
+    for (let r = 0; r < 5; r++) {
+        let rowDiv = document.createElement("div");
+
+        for (let c = 1; c <= 10; c++) {
+
+            let seat = document.createElement("div");
+            let label = String.fromCharCode(65 + r) + c;
+
+            seat.className = "seat";
+            seat.innerText = label;
+
+            seat.onclick = function() {
+
+                if (seat.classList.contains("booked")) return;
+
+                if (selectedSeats.includes(label)) {
+                    seat.classList.remove("selected");
+                    selectedSeats = selectedSeats.filter(s => s !== label);
+                } else {
+                    if (selectedSeats.length < seatsRequired) {
+                        seat.classList.add("selected");
+                        selectedSeats.push(label);
+                    }
+                }
+
+                if (selectedSeats.length === seatsRequired) {
+                    submitSeats();
+                }
+            };
+
+            rowDiv.appendChild(seat);
+        }
+
+        screen.appendChild(rowDiv);
+    }
+}
+
+/* -------- SEND SEATS -------- */
+
+function submitSeats() {
+    selectedSeats.forEach(seat => sendInput(seat));
 }
 </script>
 
